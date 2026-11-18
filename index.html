@@ -45,6 +45,9 @@ nav button.on{color:var(--acc)}
 h3{margin:18px 0 6px;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
 .slot .lab{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut)}
 .slot{cursor:pointer}
+.pinb{padding:4px 10px;font-size:12px}
+.card.sel{border-color:var(--acc)}
+.opt{cursor:pointer}
 .warn{padding:9px 12px;border-radius:10px;margin:6px 0;font-size:13.5px}
 .warn.bad{background:#2a1414;color:#ff9a9a;border:1px solid #4a2020}
 .warn.warn{background:#2a2110;color:#ffd27a;border:1px solid #4a3a16}
@@ -206,13 +209,13 @@ const diff=(a,b)=>Math.round(dnum(a)-dnum(b));
 const nice=s=>{const [y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d).toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'})};
 
 let view='today';
-const D={date:todayS(),sel:{top:null,layer:null,bottom:null,shoes:null},vibe:'any',layer:'off',temp:'warm',seen:new Set()};
+const D={date:todayS(),sel:{top:null,layer:null,bottom:null,shoes:null},vibe:'any',layer:'off',temp:'warm',seen:new Set(),pin:{top:false,layer:false,bottom:false,shoes:false},opts:[]};
 const W={cat:'all',q:''};
 function loadDraft(){
   const l=S.logs.find(x=>x.date===D.date);
   D.sel={top:null,layer:null,bottom:null,shoes:null};
   if(l)l.items.forEach(id=>{const it=item(id);if(it)D.sel[it.cat]=id});
-  D.seen=new Set();
+  D.seen=new Set();D.pin={top:false,layer:false,bottom:false,shoes:false};D.opts=[];
 }
 const item=id=>S.items.find(i=>i.id===id);
 loadDraft();
@@ -296,7 +299,7 @@ function scoreFit(f){
 
   /* build: more mass below than above, so build the top half and quiet the legs */
   if(S.build==='lower'){
-    if(bottom.kind==='baggy')add(-4,'Baggy denim adds width where you want less');
+    if(bottom.kind==='baggy')add(-2,'Baggy denim adds width where you want less');
     if(bt==='dark')add(1,'Dark leg slims the lower half');
     else if(bt==='light')add(-1.5,'Light leg pulls the eye down');
     if(top.heavy)add(2,'Weight and texture build the upper frame');
@@ -342,6 +345,7 @@ function scoreFit(f){
 
   /* learned taste */
   let tz=0;pairKeys(ps).forEach(k=>{tz+=(S.taste[k]||0)});
+  tz=Math.max(-2,Math.min(2,tz));
   if(tz>0)add(tz*2.5,'Matches your fire picks');
   else if(tz<0)add(tz*2.5,'Close to something you noped');
 
@@ -381,44 +385,74 @@ function pool(cat,date,filter){
   all=all.sort((a,b)=>{const da=daysSince(a.id,date),db=daysSince(b.id,date);return (db===null?999:db)-(da===null?999:da)});
   return all.slice(0,3);
 }
-function suggest(){
+const pinned=cat=>(D.pin[cat]&&D.sel[cat])?item(D.sel[cat]):null;
+const pinCount=()=>CATS.filter(c=>pinned(c[0])).length;
+const mustIds=()=>CATS.map(c=>pinned(c[0])).filter(Boolean).map(i=>i.id);
+/* every legal fit, scored. Pinned slots are fixed; the rest rotate with real fatigue, not a token nudge */
+function genCands(relax){
   const date=D.date,LB=logsBefore(date);
-  const recent=LB.filter(l=>diff(date,l.date)<=S.settings.combo);
-  const ds={};S.items.forEach(i=>{const l=LB.find(x=>x.items.includes(i.id));ds[i.id]=l?diff(date,l.date):null});
-  const rot=(it,w)=>w*Math.min(ds[it.id]===null?30:ds[it.id],30)/30;
+  const recent=relax?[]:LB.filter(l=>diff(date,l.date)<=S.settings.combo);
+  const ds={},use={};
+  S.items.forEach(i=>{const l=LB.find(x=>x.items.includes(i.id));ds[i.id]=l?diff(date,l.date):null;use[i.id]=LB.filter(x=>diff(date,x.date)<=14&&x.items.includes(i.id)).length});
+  const RW={top:[1.5,.8],bottom:[2.5,1.2],shoes:[2.5,1.2],layer:[.8,.4]};
+  const rot=(it,cat)=>{if(pinned(cat))return 0;const w=RW[cat];return w[0]*Math.min(ds[it.id]===null?30:ds[it.id],30)/30-w[1]*use[it.id]};
   const vf=i=>D.vibe==='any'||i.vibes.includes(D.vibe);
-  const tops=pool('top',date,vf),bottomsAll=pool('bottom',date),shoesAll=pool('shoes',date);
+  const P={top:pinned('top'),layer:pinned('layer'),bottom:pinned('bottom'),shoes:pinned('shoes')};
+  const tops=P.top?[P.top]:pool('top',date,vf);
+  const bottomsAll=P.bottom?[P.bottom]:pool('bottom',date);
+  const shoesAll=P.shoes?[P.shoes]:pool('shoes',date);
   const cands=[];
   tops.forEach(t=>{
-    const common=i=>i.vibes.some(v=>t.vibes.includes(v));
+    const common=i=>relax||i.vibes.some(v=>t.vibes.includes(v));
     const bs=bottomsAll.filter(common),ss=shoesAll.filter(common);
-    const ls=D.layer==='on'?pool('layer',date,common):[null];
+    const ls=P.layer?[P.layer]:(D.layer==='on'?pool('layer',date,common):[null]);
     bs.forEach(b=>{
-      if(recent.some(l=>l.items.includes(t.id)&&l.items.includes(b.id)))return;
-      ss.forEach(s=>ls.forEach(l=>{
-        const ids=[t,l,b,s].filter(Boolean).map(x=>x.id);
-        if(recent.some(r=>r.items.length===ids.length&&ids.every(i=>r.items.includes(i))))return;
-        const r=scoreFit({top:t,layer:l,bottom:b,shoes:s});
+      if(!(P.top&&P.bottom)&&recent.some(l=>l.items.includes(t.id)&&l.items.includes(b.id)))return;
+      ss.forEach(sh=>ls.forEach(l=>{
+        const ids=[t,l,b,sh].filter(Boolean).map(x=>x.id);
+        if(mustIds().length<3&&recent.some(r=>r.items.length===ids.length&&ids.every(i=>r.items.includes(i))))return;
+        const r=scoreFit({top:t,layer:l,bottom:b,shoes:sh});
         if(r.H.length)return;
-        const sc=r.raw+rot(t,1.2)+rot(b,.8)+rot(s,.8)+(l?rot(l,.3):0);
-        cands.push({sel:{top:t.id,layer:l?l.id:null,bottom:b.id,shoes:s.id},sc,key:ids.join('|')});
+        const sc=r.raw+rot(t,'top')+rot(b,'bottom')+rot(sh,'shoes')+(l?rot(l,'layer'):0);
+        cands.push({sel:{top:t.id,layer:l?l.id:null,bottom:b.id,shoes:sh.id},sc,key:ids.join('|')});
       }));
     });
   });
-  if(!cands.length){toast('No legal fit with these rules. Loosen Settings or change vibe.');return}
-  cands.sort((a,b)=>b.sc-a.sc);
+  return cands;
+}
+/* sample n DIFFERENT looks: softmax draw over all candidates, then penalise reusing the same bottom/shoes */
+function pickMany(cands,n,uniqTop){
+  const out=[],left=cands.slice();
+  while(out.length<n&&left.length){
+    const adj=left.map(c=>{let a=c.sc;out.forEach(o=>{if(o.sel.bottom===c.sel.bottom)a-=3;if(o.sel.shoes===c.sel.shoes)a-=3;if(c.sel.layer&&o.sel.layer===c.sel.layer)a-=1.5});return a});
+    const best=Math.max(...adj),idx=[];
+    adj.forEach((a,i)=>{if(a>=best-9)idx.push(i)});
+    const ws=idx.map(i=>Math.exp((adj[i]-best)/2.2));
+    let r=Math.random()*ws.reduce((x,y)=>x+y,0),k=idx[idx.length-1];
+    for(let j=0;j<idx.length;j++){r-=ws[j];if(r<=0){k=idx[j];break}}
+    const pick=left[k];out.push(pick);
+    for(let i=left.length-1;i>=0;i--){if(left[i].key===pick.key||(uniqTop&&left[i].sel.top===pick.sel.top))left.splice(i,1)}
+  }
+  return out;
+}
+function suggest(){
+  let cands=genCands(0),relaxed=false;
+  if(!cands.length){cands=genCands(1);relaxed=true}
+  if(!cands.length){
+    let why='No legal fit with these rules. Loosen Settings, change vibe, or unpin something.';
+    const P=CATS.map(c=>pinned(c[0]));
+    if(P[0]&&P[2]&&P[3]){const r=scoreFit({top:P[0],layer:P[1],bottom:P[2],shoes:P[3]});if(r.H.length)why='Pinned pieces clash: '+r.H[0]}
+    else if(pinCount()>=2)why="Those pinned pieces can't work together under your rules (loafers + baggy jeans, say). Unpin one."
+    toast(why);return;
+  }
   let fresh=cands.filter(c=>!D.seen.has(c.key));
   if(!fresh.length){D.seen=new Set();fresh=cands}
-  // best fit per top, keep the ones within reach of the best, pick a style bucket at random, then a score-weighted draw inside it
-  const seenTop=new Set(),per=[];
-  for(const c of fresh){if(!seenTop.has(c.sel.top)){seenTop.add(c.sel.top);per.push(c)}}
-  const ok=per.filter(c=>c.sc>=per[0].sc-5);
-  const buckets={};ok.forEach(c=>{const k=item(c.sel.top).kind;(buckets[k]=buckets[k]||[]).push(c)});
-  const ks=Object.keys(buckets),grp=buckets[ks[Math.floor(Math.random()*ks.length)]].slice(0,6);
-  const ws=grp.map(c=>Math.exp((c.sc-grp[0].sc)/2));
-  let r=Math.random()*ws.reduce((a,b)=>a+b,0),pick=grp[grp.length-1];
-  for(let i=0;i<grp.length;i++){r-=ws[i];if(r<=0){pick=grp[i];break}}
-  D.seen.add(pick.key);D.sel=pick.sel;render();
+  const opts=pickMany(fresh,4,!pinned('top'));
+  opts.forEach(o=>D.seen.add(o.key));
+  D.opts=opts.map(o=>o.sel);
+  D.sel=Object.assign({top:null,layer:null,bottom:null,shoes:null},opts[0].sel);
+  render();
+  if(relaxed)toast('Bent the repeat rules to build around that');
 }
 function taste(delta,fit){
   const f=fit||getFit();if(!f)return;
@@ -439,6 +473,8 @@ const SYS=`You are the personal stylist for Aakash, 23, based in Chennai (hot an
 His build: the message carries body measurements and notes. Default read: narrower, lighter upper body and a heavier, stronger lower half. Dress the proportion. Build the upper half visually with structure, texture, weight, horizontal stripes, brighter or lighter tops over darker legs, and layers that add a shoulder line when the weather allows. Keep the legs dark, clean and not baggy. Never pair a drapey, light-fabric, boxy top (beach shirts) with baggy jeans. Explain the proportion logic in terms of his body, not generic praise.
 
 Hard rules: exactly one top, one bottom, one pair of shoes, and at most one layer (only when layer_allowed is true). Loafers only with a shirt or polo, never with baggy jeans or a hoodie. No hoodie over a collared shirt or jersey. No layer over a beach shirt. One focal point: at most one accent-role piece (or a matching accent family); accent-role shoes need an otherwise neutral fit. Respect rest rules: never use a piece whose days_since_worn is less than or equal to its category rest days, and never repeat a top+bottom pair worn within no_repeat_pair_days. When it does not hurt the look, favour pieces with a high days_since_worn and say when you are rescuing a neglected piece. Honour taste_memory (positive = he fired it, negative = he noped it), the occasion, the weather, and the vibe_filter.
+
+Rotation: every item carries use_14d (times worn in the last 14 days). No two looks you return may share the same bottom or the same shoes, and lean toward low use_14d. Do not default to his favourite jeans and shoes. If must_include is non-empty, EVERY look must contain exactly those item ids (they override rest rules and the vibe filter) and only the other slots vary.
 
 Be specific and brief. Return ONLY one JSON object, no prose around it.`;
 
@@ -471,29 +507,30 @@ function payload(mode,extra){
   const date=D.date,LB=logsBefore(date);
   const ds=id=>{const l=LB.find(x=>x.items.includes(id));return l?diff(date,l.date):null};
   const nm=id=>{const i=item(id);return i?i.name:'?'};
-  const items=S.items.filter(i=>i.owned).map(i=>({id:i.id,name:i.name,cat:i.cat,type:i.kind,role:i.role,tone:tone(i),hex:i.color,heavy:i.heavy,pattern:i.pat,stripe:!!i.stripe,vibes:i.vibes,days_since_worn:ds(i.id)}));
+  const items=S.items.filter(i=>i.owned).map(i=>({id:i.id,name:i.name,cat:i.cat,type:i.kind,role:i.role,tone:tone(i),hex:i.color,heavy:i.heavy,pattern:i.pat,stripe:!!i.stripe,vibes:i.vibes,days_since_worn:ds(i.id),use_14d:LB.filter(x=>diff(date,x.date)<=14&&x.items.includes(i.id)).length}));
   const last=LB.slice(0,10).map(l=>({days_ago:diff(date,l.date),items:l.items.map(nm)}));
   const taste=Object.keys(S.taste).filter(k=>S.taste[k]).map(k=>({pair:k.split('|').map(nm),score:S.taste[k]}));
-  return JSON.stringify(Object.assign({mode,date,weather:D.temp==='warm'?'hot and humid':'cool',vibe_filter:D.vibe,layer_allowed:D.layer==='on',body:Object.assign({build:S.build},S.profile),rest_days:S.settings.rest,no_repeat_pair_days:S.settings.combo,items,last_logs:last,taste_memory:taste},extra));
+  return JSON.stringify(Object.assign({mode,date,weather:D.temp==='warm'?'hot and humid':'cool',vibe_filter:D.vibe,layer_allowed:D.layer==='on'||!!pinned('layer'),must_include:mustIds(),body:Object.assign({build:S.build},S.profile),rest_days:S.settings.rest,no_repeat_pair_days:S.settings.combo,items,last_logs:last,taste_memory:taste},extra));
 }
 function legal(l){
   const g=(id,cat)=>{const i=id&&item(id);return (i&&i.owned&&i.cat===cat)?i:null};
   const top=g(l.top,'top'),bottom=g(l.bottom,'bottom'),shoes=g(l.shoes,'shoes');
   if(!top||!bottom||!shoes)return 'unknown or wrong-category id';
   let layer=null;
-  if(l.layer){layer=g(l.layer,'layer');if(!layer)return 'bad layer id';if(D.layer!=='on')return 'layer not allowed today'}
+  if(l.layer){layer=g(l.layer,'layer');if(!layer)return 'bad layer id';if(D.layer!=='on'&&!pinned('layer'))return 'layer not allowed today'}
+  const need=mustIds();if(need.some(id=>![l.top,l.layer,l.bottom,l.shoes].includes(id)))return 'missing a pinned piece'
   const fit={top,layer,bottom,shoes},r=scoreFit(fit);
   if(r.H.length)return r.H[0];
-  for(const it of [top,layer,bottom,shoes]){if(it&&blocked(it,D.date))return it.name+' is still resting'}
+  for(const it of [top,layer,bottom,shoes]){if(it&&blocked(it,D.date)&&!(pinned(it.cat)&&pinned(it.cat).id===it.id))return it.name+' is still resting'}
   const pd=lastPairDays(top.id,bottom.id,D.date);
-  if(pd!==null&&pd<=S.settings.combo)return 'top+bottom pair worn '+pd+'d ago';
+  if(pd!==null&&pd<=S.settings.combo&&!(pinned('top')&&pinned('bottom')))return 'top+bottom pair worn '+pd+'d ago';
   return {fit,r};
 }
 async function styleMe(){
   ST.busy=true;ST.err='';ST.msg='';ST.looks=[];ST.crit=null;render();
   try{
     const extra={occasion:ST.occ||'no specific occasion, a strong everyday look',
-      task:'Design 3 distinct looks with different tops and different moods. Each needs one clear idea.',
+      task:'Design 3 distinct looks with different tops, different bottoms and different shoes, and different moods. Each needs one clear idea.'+(mustIds().length?' Every look must include the must_include pieces.':''),
       reply_json_shape:'{"looks":[{"title":"short name","top":"id","layer":"id or null","bottom":"id","shoes":"id","idea":"one line concept","why":"2 sentences: proportion logic for his build + why the colours and pieces work"}]}'};
     let msgs=[{role:'user',content:payload('style',extra)}],out=[],rej=[];
     for(let a=0;a<2;a++){
@@ -549,6 +586,7 @@ function vStylist(){
     ${ST.crit.swapFit?`<div class="mut" style="margin-top:8px">Suggested swap: ${[ST.crit.swapFit.fit.top,ST.crit.swapFit.fit.layer,ST.crit.swapFit.fit.bottom,ST.crit.swapFit.fit.shoes].filter(Boolean).map(p=>esc(p.name)).join(' · ')}</div><button class="btn" style="margin-top:8px" data-a="applyswap">Apply swap</button>`:''}</div>`;
   }
   return `
+  ${pinBar()||'<div class="mut" style="margin-top:8px">Tip: pick a piece on Today and the looks get built around it.</div>'}
   <div class="card" style="margin-top:8px"><label class="f" style="margin-top:0">Where are you going?</label>
   <input type="text" id="occ" placeholder="e.g. college reunion, evening, hot" value="${esc(ST.occ)}">
   <div class="chips">${['any','casual','smart','beach'].map(v=>`<button class="chip ${D.vibe===v?'on':''}" data-a="vibe" data-v="${v}">${v}</button>`).join('')}
@@ -562,7 +600,7 @@ function slotHTML(cat,label){
   let body;
   if(it){
     const d=daysSince(it.id,D.date),bad=blocked(it,D.date);
-    body=`<div class="row"><span class="dot" style="background:${it.color}"></span><div class="sp"><div class="nm">${esc(it.name)}</div><div class="mut">last worn: ${ago(d)}</div></div>${bad?'<span class="tag bad">too soon</span>':''}</div>`;
+    body=`<div class="row"><span class="dot" style="background:${it.color}"></span><div class="sp"><div class="nm">${esc(it.name)}</div><div class="mut">last worn: ${ago(d)}</div></div>${bad?'<span class="tag bad">too soon</span>':''}<button class="chip pinb ${D.pin[cat]?'on':''}" data-a="pin" data-cat="${cat}">${D.pin[cat]?'📌 pinned':'pin'}</button></div>`;
   }else body=`<div class="mut">${cat==='layer'?'None':'Tap to pick'}</div>`;
   return `<div class="card slot" data-a="pick" data-cat="${cat}"><div class="lab">${label}</div>${body}</div>`;
 }
@@ -574,6 +612,18 @@ function scoreCard(){
   return `<div class="card"><div class="row"><div class="sp"><div class="mut">Drip score</div><div class="score">${score10(r.raw).toFixed(1)}<small> / 10</small></div></div>
   <button class="btn sm ghost" data-a="nope">Nope</button><button class="btn sm" data-a="fire">Fire</button></div>
   <ul class="why">${pos.map(x=>`<li>${esc(x.m)}</li>`).join('')}${neg.map(x=>`<li class="n">${esc(x.m)}</li>`).join('')}</ul></div>`;
+}
+function optCard(s,i){
+  const its=CATS.map(c=>s[c[0]]).filter(Boolean).map(item);
+  const f={top:item(s.top),layer:s.layer?item(s.layer):null,bottom:item(s.bottom),shoes:item(s.shoes)};
+  const sc=score10(scoreFit(f).raw).toFixed(1);
+  const on=CATS.every(c=>(D.sel[c[0]]||null)===(s[c[0]]||null));
+  return `<div class="card opt ${on?'sel':''}" data-a="useopt" data-i="${i}"><div class="row"><div class="sp mut">Option ${i+1}${on?' · showing':' · tap to use'}</div><div class="nm">${sc}</div></div><div class="chips" style="margin:6px 0 0">${its.map(p=>`<span class="chip"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${p.color};margin-right:6px;border:1px solid #fff3"></span>${esc(p.name)}${pinned(p.cat)&&pinned(p.cat).id===p.id?' 📌':''}</span>`).join('')}</div></div>`;
+}
+const optsHTML=()=>D.opts.length>1?`<h3>${D.opts.length} options${pinCount()?' around your pinned piece'+(pinCount()>1?'s':''):''}</h3>`+D.opts.map(optCard).join(''):'';
+function pinBar(){
+  const ps=CATS.map(c=>pinned(c[0])).filter(Boolean);
+  return ps.length?`<div class="card"><div class="mut">Building around</div><div class="chips">${ps.map(p=>`<button class="chip on" data-a="pin" data-cat="${p.cat}">📌 ${esc(p.name)} ✕</button>`).join('')}</div></div>`:'';
 }
 function vToday(){
   const has=!!S.logs.find(l=>l.date===D.date);
@@ -587,7 +637,8 @@ function vToday(){
   <div class="chips">${['any','casual','smart','beach'].map(v=>`<button class="chip ${D.vibe===v?'on':''}" data-a="vibe" data-v="${v}">${v}</button>`).join('')}
   <button class="chip ${D.layer==='on'?'on':''}" data-a="layermode">layer: ${D.layer==='on'?'add one':'none'}</button>
   <button class="chip ${D.temp==='cool'?'on':''}" data-a="tempmode">weather: ${D.temp}</button></div>
-  <button class="btn" data-a="suggest">Suggest fit</button>
+  <button class="btn" data-a="suggest">${pinCount()?'Suggest around pinned':'Suggest fit'}</button>
+  ${optsHTML()}
   ${CATS.map(c=>slotHTML(c[0],c[1])).join('')}
   ${scoreCard()}
   ${w.map(x=>`<div class="warn ${x.t}">${esc(x.m)}</div>`).join('')}
@@ -724,15 +775,17 @@ const A={
     catch(e){el.style.color='var(--bad)';el.textContent='Failed: '+e.message}
   },
   critique(){critique()},
-  wear(d){const x=ST.looks[Number(d.i)];if(!x)return;const f=x.fit;D.sel={top:f.top.id,layer:f.layer?f.layer.id:null,bottom:f.bottom.id,shoes:f.shoes.id};view='today';render();scrollTo(0,0)},
+  wear(d){const x=ST.looks[Number(d.i)];if(!x)return;const f=x.fit;D.sel={top:f.top.id,layer:f.layer?f.layer.id:null,bottom:f.bottom.id,shoes:f.shoes.id};D.pin={top:false,layer:false,bottom:false,shoes:false};D.opts=[];view='today';render();scrollTo(0,0)},
   nopelook(d){const i=Number(d.i),x=ST.looks[i];if(!x)return;taste(-1,x.fit);ST.looks.splice(i,1);render();toast('Noted. Not that.')},
-  applyswap(){const s=ST.crit&&ST.crit.swapFit;if(!s)return;const f=s.fit;D.sel={top:f.top.id,layer:f.layer?f.layer.id:null,bottom:f.bottom.id,shoes:f.shoes.id};view='today';render();scrollTo(0,0)},
+  applyswap(){const s=ST.crit&&ST.crit.swapFit;if(!s)return;const f=s.fit;D.sel={top:f.top.id,layer:f.layer?f.layer.id:null,bottom:f.bottom.id,shoes:f.shoes.id};D.pin={top:false,layer:false,bottom:false,shoes:false};D.opts=[];view='today';render();scrollTo(0,0)},
   suggest(){suggest()},
   nope(){taste(-1);suggest()},
   fire(){taste(1);toast('Noted. More like this.')},
   resettaste(){S.taste={};save();render();toast('Taste wiped')},
   pick(d){pickSheet(d.cat)},
-  choose(d){D.sel[d.cat]=d.id||null;closeSheet();render()},
+  choose(d){D.sel[d.cat]=d.id||null;D.pin[d.cat]=!!d.id;D.opts=[];D.seen=new Set();closeSheet();render()},
+  pin(d){if(!D.sel[d.cat]){toast('Pick something first');return}D.pin[d.cat]=!D.pin[d.cat];D.opts=[];D.seen=new Set();render()},
+  useopt(d){const o=D.opts[Number(d.i)];if(!o)return;D.sel=Object.assign({top:null,layer:null,bottom:null,shoes:null},o);render()},
   log(){
     const ids=CATS.map(c=>D.sel[c[0]]).filter(Boolean);
     if(!ids.length){toast('Pick something first');return}
@@ -744,7 +797,7 @@ const A={
   clear(){
     const has=S.logs.find(l=>l.date===D.date);
     if(has){S.logs=S.logs.filter(l=>l.date!==D.date);save();}
-    D.sel={top:null,layer:null,bottom:null,shoes:null};render();
+    D.sel={top:null,layer:null,bottom:null,shoes:null};D.pin={top:false,layer:false,bottom:false,shoes:false};D.opts=[];render();
   },
   wcat(d){W.cat=d.c;render()},
   add(){editSheet(null)},
